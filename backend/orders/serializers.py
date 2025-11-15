@@ -52,6 +52,8 @@ class OrderListSerializer(serializers.ModelSerializer):
             "status",
             "delivered_at",
             "customer_phone",
+            "location_lat",
+            "location_lng",
             "delivery_price_offer",
             "courier",
             "total_weight_kg",

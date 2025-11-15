@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Avatar,
@@ -26,6 +26,10 @@ import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded'
 import PaidRoundedIcon from '@mui/icons-material/PaidRounded'
 import axios from 'axios'
 import type { UserProfile } from '../components/AuthDialogs'
+import 'leaflet/dist/leaflet.css'
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap, Polyline } from 'react-leaflet'
+import L from 'leaflet'
+import type { LatLngExpression } from 'leaflet'
 
 interface Order {
   id: number
@@ -35,6 +39,8 @@ interface Order {
   courier: number | null
   total_weight_kg: number
   delivered_at: string | null
+  location_lat: number
+  location_lng: number
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api'
@@ -51,6 +57,13 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
   const [acceptError, setAcceptError] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
+  const [geoLoading, setGeoLoading] = useState(false)
+  const [geoError, setGeoError] = useState<string | null>(null)
+  const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null)
+  const [routeCoords, setRouteCoords] = useState<Array<[number, number]> | null>(null)
+  const [routeLoading, setRouteLoading] = useState(false)
+  const [routeError, setRouteError] = useState<string | null>(null)
+  const [fitTrigger, setFitTrigger] = useState(0)
 
   const { data: orders, isFetching } = useQuery<Order[]>({
     queryKey: ['pendingOrders', token],
@@ -195,6 +208,55 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
     return completedOrders.reduce((acc, order) => acc + parseFloat(order.delivery_price_offer || '0'), 0)
   }, [completedOrders])
 
+  const handleUseMyLocation = () => {
+    if (!navigator?.geolocation) {
+      setGeoError("La géolocalisation n'est pas disponible sur ce navigateur.")
+      return
+    }
+    setGeoLoading(true)
+    setGeoError(null)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setMyPos({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+        setGeoLoading(false)
+      },
+      (err) => {
+        const messages: Record<number, string> = {
+          1: "Permission refusée pour la géolocalisation.",
+          2: 'Position indisponible pour le moment.',
+          3: 'Délai dépassé lors de la géolocalisation.',
+        }
+        setGeoError(messages[err.code] || 'Impossible de récupérer votre position.')
+        setGeoLoading(false)
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    )
+  }
+
+  const requestRoute = async (dest: { lat: number; lng: number }) => {
+    if (!myPos) {
+      setRouteError("Activez d'abord votre position pour tracer un itinéraire.")
+      return
+    }
+    try {
+      setRouteLoading(true)
+      setRouteError(null)
+      // OSRM public demo server (best effort, non garanti pour la prod)
+      const url = `https://router.project-osrm.org/route/v1/driving/${myPos.lng},${myPos.lat};${dest.lng},${dest.lat}?overview=full&geometries=geojson`
+      const { data } = await axios.get(url)
+      const coords: Array<[number, number]> = data?.routes?.[0]?.geometry?.coordinates?.map(
+        (c: [number, number]) => [c[1], c[0]],
+      )
+      if (!coords || !coords.length) throw new Error('Route introuvable')
+      setRouteCoords(coords)
+    } catch (e) {
+      setRouteCoords(null)
+      setRouteError("Impossible de récupérer l'itinéraire.")
+    } finally {
+      setRouteLoading(false)
+    }
+  }
+
   if (!user) {
     return (
       <Alert severity="info">
@@ -223,6 +285,43 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
           Activez votre disponibilité et acceptez les courses prioritaires selon votre capacité.
         </Typography>
       </Box>
+
+      {/* Carte des commandes */}
+      <Card className="glass-panel">
+        <CardHeader title="Carte des commandes" subheader="Visualisez les commandes en attente et vos courses en cours" />
+        <CardContent>
+          <Stack spacing={1} sx={{ mb: 1 }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+              <Button variant="contained" size="small" onClick={handleUseMyLocation} disabled={geoLoading}>
+                {geoLoading ? 'Localisation…' : 'Centrer sur ma position'}
+              </Button>
+              {routeCoords && (
+                <Button variant="outlined" size="small" color="info" onClick={() => setRouteCoords(null)} disabled={routeLoading}>
+                  Effacer l'itinéraire
+                </Button>
+              )}
+              <Button variant="outlined" size="small" onClick={() => setFitTrigger((n) => n + 1)}>
+                Ajuster la carte aux commandes
+              </Button>
+              {geoError && <Alert severity="warning" sx={{ py: 0.5 }}>{geoError}</Alert>}
+              {routeError && <Alert severity="error" sx={{ py: 0.5 }}>{routeError}</Alert>}
+            </Stack>
+          </Stack>
+          <Box sx={{ height: 400, borderRadius: 2, overflow: 'hidden' }}>
+            <OrdersMap
+              pending={orders || []}
+              active={activeOrders || []}
+              myPos={myPos}
+              route={routeCoords}
+              onRequestRoute={requestRoute}
+              fitTrigger={fitTrigger}
+            />
+          </Box>
+          <Typography variant="caption" sx={{ opacity: 0.7 }}>
+            • Orange: commandes en attente · • Vert: commandes acceptées
+          </Typography>
+        </CardContent>
+      </Card>
 
       <Card className="glass-panel">
         <CardHeader
@@ -431,4 +530,91 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
       </Card>
     </Stack>
   )
+}
+
+type OrdersMapProps = {
+  pending: Order[]
+  active: Order[]
+  myPos: { lat: number; lng: number } | null
+  route: Array<[number, number]> | null
+  onRequestRoute: (dest: { lat: number; lng: number }) => void
+  fitTrigger: number
+}
+
+function OrdersMap({ pending, active, myPos, route, onRequestRoute, fitTrigger }: OrdersMapProps) {
+  // Center: average of all points, fallback to a default city center
+  const all = [...pending, ...active]
+  const avgLat = all.length ? all.reduce((a, o) => a + (o.location_lat || 0), 0) / all.length : 33.5731
+  const avgLng = all.length ? all.reduce((a, o) => a + (o.location_lng || 0), 0) / all.length : -7.5898
+  const center: LatLngExpression = [avgLat, avgLng]
+  return (
+    <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }}>
+      <TileLayer
+        attribution='&copy; OpenStreetMap contributors'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      />
+      <PanTo position={myPos} />
+      <FitToMarkers points={all.map(o => [o.location_lat, o.location_lng] as [number, number])} trigger={fitTrigger} extra={myPos ? [[myPos.lat, myPos.lng] as [number, number]] : []} />
+      {pending.map((o) => (
+        <CircleMarker key={`p-${o.id}`} center={[o.location_lat, o.location_lng]} radius={10} pathOptions={{ color: '#f59e0b' }}>
+          <Popup>
+            <strong>Commande #{o.id}</strong><br />
+            Poids: {o.total_weight_kg.toFixed(2)} kg<br />
+            Offre: {o.delivery_price_offer} €<br />
+            Statut: {o.status}
+            <Button size="small" variant="text" onClick={() => onRequestRoute({ lat: o.location_lat, lng: o.location_lng })}>
+              Itinéraire vers ce client
+            </Button>
+          </Popup>
+        </CircleMarker>
+      ))}
+      {active.map((o) => (
+        <CircleMarker key={`a-${o.id}`} center={[o.location_lat, o.location_lng]} radius={10} pathOptions={{ color: '#22c55e' }}>
+          <Popup>
+            <strong>En cours #{o.id}</strong><br />
+            Poids: {o.total_weight_kg.toFixed(2)} kg<br />
+            Offre: {o.delivery_price_offer} €<br />
+            Statut: {o.status}
+            <Button size="small" variant="text" onClick={() => onRequestRoute({ lat: o.location_lat, lng: o.location_lng })}>
+              Itinéraire vers ce client
+            </Button>
+          </Popup>
+        </CircleMarker>
+      ))}
+      {myPos && (
+        <CircleMarker center={[myPos.lat, myPos.lng]} radius={8} pathOptions={{ color: '#3b82f6' }}>
+          <Popup>Ma position actuelle</Popup>
+        </CircleMarker>
+      )}
+      {route && route.length > 1 && (
+        <Polyline positions={route} pathOptions={{ color: '#3b82f6', weight: 4 }} />
+      )}
+    </MapContainer>
+  )
+}
+
+function FitToMarkers({ points, trigger, extra = [] as [number, number][] }: { points: [number, number][]; trigger: number; extra?: [number, number][] }) {
+  const map = useMap()
+  useEffect(() => {
+    const pts = [...points, ...extra]
+    if (pts.length === 0) return
+    const valid = pts.filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng))
+    if (valid.length === 0) return
+    const bounds = L.latLngBounds(valid as [number, number][])
+    try {
+      map.fitBounds(bounds, { padding: [30, 30] })
+    } catch {}
+  }, [trigger])
+  return null
+}
+
+function PanTo({ position }: { position: { lat: number; lng: number } | null }) {
+  const map = useMap()
+  useEffect(() => {
+    if (!position) return
+    try {
+      map.flyTo([position.lat, position.lng], Math.max(map.getZoom(), 14))
+    } catch {}
+  }, [position])
+  return null
 }
