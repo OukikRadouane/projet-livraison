@@ -1,0 +1,13 @@
+Django>=5.0,<6.0
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+channels
+drf-spectacular
+requests
+haversine
+pytest
+pytest-django
+ruff
+black
+isort
