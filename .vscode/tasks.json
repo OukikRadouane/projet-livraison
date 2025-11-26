@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Backend: Django",
+      "type": "shell",
+      "command": "py",
+      "args": ["manage.py", "runserver", "0.0.0.0:8000"],
+      "options": { "cwd": "${workspaceFolder}\\backend" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Frontend: Vite",
+      "type": "shell",
+      "command": "npm run dev -- --host 0.0.0.0 --port 5173",
+      "options": { "cwd": "${workspaceFolder}\\frontend" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Dev: All",
+      "dependsOn": ["Backend: Django", "Frontend: Vite"],
+      "dependsOrder": "parallel"
+    }
+  ]
+}
