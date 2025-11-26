@@ -42,6 +42,43 @@ class OrderSerializer(serializers.ModelSerializer):
         return order
 
 
+class OrderItemReadSerializer(serializers.ModelSerializer):
+    item_id = serializers.IntegerField(source="item.id")
+    name = serializers.CharField(source="item.name")
+    weight_per_unit_kg = serializers.FloatField(source="item.weight_per_unit_kg")
+
+    class Meta:
+        model = OrderItem
+        fields = ["item_id", "name", "weight_per_unit_kg", "quantity"]
+
+
+class OrderDetailSerializer(serializers.ModelSerializer):
+    items = OrderItemReadSerializer(many=True, read_only=True)
+    total_weight_kg = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Order
+        fields = [
+            "id",
+            "customer_phone",
+            "location_lat",
+            "location_lng",
+            "delivery_price_offer",
+            "status",
+            "courier",
+            "restaurant_name",
+            "restaurant_lat",
+            "restaurant_lng",
+            "items",
+            "total_weight_kg",
+            "created_at",
+            "delivered_at",
+        ]
+
+    def get_total_weight_kg(self, obj):
+        return obj.estimated_weight_kg()
+
+
 class OrderListSerializer(serializers.ModelSerializer):
     total_weight_kg = serializers.SerializerMethodField()
 

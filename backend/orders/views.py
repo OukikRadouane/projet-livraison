@@ -3,9 +3,10 @@ from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from datetime import datetime
 
 from .models import Order
-from .serializers import OrderListSerializer, OrderSerializer
+from .serializers import OrderListSerializer, OrderSerializer, OrderDetailSerializer
 
 
 class OrderCreateView(generics.CreateAPIView):
@@ -54,6 +55,60 @@ class CourierCompletedOrdersView(generics.ListAPIView):
 			Order.objects.filter(courier=user, status=Order.Status.DELIVERED)
 			.order_by("-delivered_at", "-created_at")
 		)
+
+
+class CourierDeleteCompletedAllView(APIView):
+	permission_classes = [permissions.IsAuthenticated]
+
+	def delete(self, request):
+		user = request.user
+		if not hasattr(user, "role") or user.role != "COURIER":
+			return Response({"detail": "Only couriers can manage history."}, status=status.HTTP_403_FORBIDDEN)
+		qs = Order.objects.filter(courier=user, status=Order.Status.DELIVERED)
+		count = qs.count()
+		qs.delete()
+		return Response({"deleted": count})
+
+
+class CourierDeleteCompletedOneView(APIView):
+	permission_classes = [permissions.IsAuthenticated]
+
+	def delete(self, request, pk: int):
+		user = request.user
+		if not hasattr(user, "role") or user.role != "COURIER":
+			return Response({"detail": "Only couriers can manage history."}, status=status.HTTP_403_FORBIDDEN)
+		order = get_object_or_404(Order, pk=pk)
+		if order.courier_id != user.id or order.status != Order.Status.DELIVERED:
+			return Response({"detail": "Not a delivered order of this courier."}, status=status.HTTP_400_BAD_REQUEST)
+		order.delete()
+		return Response({"deleted": 1})
+
+
+class CourierDeleteCompletedByDateView(APIView):
+	permission_classes = [permissions.IsAuthenticated]
+
+	def delete(self, request):
+		user = request.user
+		if not hasattr(user, "role") or user.role != "COURIER":
+			return Response({"detail": "Only couriers can manage history."}, status=status.HTTP_403_FORBIDDEN)
+		date_str = request.query_params.get("date") or request.data.get("date")
+		if not date_str:
+			return Response({"detail": "Missing date (YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
+		try:
+			day = datetime.strptime(date_str, "%Y-%m-%d").date()
+		except ValueError:
+			return Response({"detail": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+		start = datetime.combine(day, datetime.min.time())
+		end = datetime.combine(day, datetime.max.time())
+		qs = Order.objects.filter(
+			courier=user,
+			status=Order.Status.DELIVERED,
+			delivered_at__gte=start,
+			delivered_at__lte=end,
+		)
+		count = qs.count()
+		qs.delete()
+		return Response({"deleted": count, "date": date_str})
 
 
 class AcceptOrderView(APIView):
@@ -133,4 +188,10 @@ class CourierCancelOrderView(APIView):
 		order.delivered_at = None
 		order.save(update_fields=["courier", "status", "delivered_at"])
 		return Response(OrderListSerializer(order).data)
+
+
+class OrderDetailView(generics.RetrieveAPIView):
+		queryset = Order.objects.all()
+		serializer_class = OrderDetailSerializer
+		permission_classes = [permissions.IsAuthenticated]
 

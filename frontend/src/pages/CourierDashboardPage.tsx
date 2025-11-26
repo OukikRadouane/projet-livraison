@@ -20,6 +20,8 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
+import IconButton from '@mui/material/IconButton'
+import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded'
 import DirectionsBikeRoundedIcon from '@mui/icons-material/DirectionsBikeRounded'
 import LoginRoundedIcon from '@mui/icons-material/LoginRounded'
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded'
@@ -43,6 +45,17 @@ interface Order {
   location_lng: number
 }
 
+interface OrderItemDetail {
+  item_id: number
+  name: string
+  weight_per_unit_kg: number
+  quantity: number
+}
+
+interface OrderDetail extends Order {
+  items: OrderItemDetail[]
+}
+
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api'
 
 interface Props {
@@ -64,6 +77,29 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
   const [routeLoading, setRouteLoading] = useState(false)
   const [routeError, setRouteError] = useState<string | null>(null)
   const [fitTrigger, setFitTrigger] = useState(0)
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [details, setDetails] = useState<Record<number, OrderDetail | null>>({})
+
+  const toggleExpanded = (id: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const loadDetails = async (id: number) => {
+    try {
+      if (!token) return
+      const response = await axios.get(`${API_BASE}/orders/${id}/`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      setDetails((d) => ({ ...d, [id]: response.data as OrderDetail }))
+    } catch (e) {
+      setDetails((d) => ({ ...d, [id]: null }))
+    }
+  }
 
   const { data: orders, isFetching } = useQuery<Order[]>({
     queryKey: ['pendingOrders', token],
@@ -188,6 +224,47 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
     enabled: !!token && user?.role === 'COURIER',
     refetchInterval: 12000,
   })
+
+  const [showHistory, setShowHistory] = useState(false)
+  const [historyDate, setHistoryDate] = useState<string>('')
+
+  const todaysCompleted = useMemo(() => {
+    if (!completedOrders) return []
+    const today = new Date()
+    const y = today.getFullYear()
+    const m = today.getMonth()
+    const d = today.getDate()
+    return completedOrders.filter((o) => {
+      if (!o.delivered_at) return false
+      const dt = new Date(o.delivered_at)
+      return dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d
+    })
+  }, [completedOrders])
+
+  const deleteAllHistory = async () => {
+    if (!token) return
+    await axios.delete(`${API_BASE}/orders/courier/completed/delete/all/`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    qc.invalidateQueries({ queryKey: ['completedOrders', token] })
+  }
+
+  const deleteOneHistory = async (id: number) => {
+    if (!token) return
+    await axios.delete(`${API_BASE}/orders/courier/completed/delete/${id}/`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    qc.invalidateQueries({ queryKey: ['completedOrders', token] })
+  }
+
+  const deleteByDateHistory = async () => {
+    if (!token || !historyDate) return
+    await axios.delete(`${API_BASE}/orders/courier/completed/delete/by-date/`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { date: historyDate },
+    })
+    qc.invalidateQueries({ queryKey: ['completedOrders', token] })
+  }
 
   const totalPotential = useMemo(() => {
     if (!orders) return 0
@@ -401,9 +478,71 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
                           <Avatar sx={{ bgcolor: 'secondary.main' }}>#{order.id}</Avatar>
                         </ListItemAvatar>
                         <ListItemText
-                          primary={`Client: ${order.customer_phone}`}
+                          primary={
+                            <Stack direction="row" alignItems="center" spacing={1}>
+                              <Typography component="span">Client: {order.customer_phone}</Typography>
+                              <IconButton
+                                size="small"
+                                onClick={() => {
+                                  toggleExpanded(order.id)
+                                  if (!details[order.id]) {
+                                    loadDetails(order.id)
+                                  }
+                                }}
+                                aria-label="Voir les détails de la commande"
+                                sx={{
+                                  transition: 'transform 0.2s',
+                                  transform: expanded.has(order.id) ? 'rotate(90deg)' : 'rotate(0deg)',
+                                }}
+                              >
+                                <ChevronRightRoundedIcon fontSize="small" />
+                              </IconButton>
+                            </Stack>
+                          }
                           secondary={`Poids estimé ${order.total_weight_kg.toFixed(2)} kg · Offre ${order.delivery_price_offer} €`}
                         />
+                        {expanded.has(order.id) && (
+                          <Box sx={{ mt: 1, px: 1, py: 1, bgcolor: 'rgba(148,163,184,0.08)', borderRadius: 2 }}>
+                            <Typography variant="body2">
+                              • Statut: {order.status}
+                            </Typography>
+                            <Typography variant="body2">
+                              • Position: lat {order.location_lat.toFixed(5)}, lng {order.location_lng.toFixed(5)}
+                            </Typography>
+                            <Typography variant="body2">
+                              • Prix livraison proposé: {order.delivery_price_offer} €
+                            </Typography>
+                            <Divider sx={{ my: 1 }} />
+                            <Typography variant="subtitle2" gutterBottom>
+                              Produits demandés
+                            </Typography>
+                            {!details[order.id] && (
+                              <Typography variant="body2" sx={{ opacity: 0.7 }}>Chargement des produits…</Typography>
+                            )}
+                            {details[order.id]?.items?.length ? (
+                              <List dense>
+                                {details[order.id]!.items.map((it) => (
+                                  <ListItem key={`${order.id}-item-${it.item_id}`} sx={{ py: 0 }}>
+                                    <ListItemText
+                                      primary={`${it.quantity} × ${it.name}`}
+                                      secondary={`Poids unitaire ${it.weight_per_unit_kg.toFixed(2)} kg`}
+                                    />
+                                  </ListItem>
+                                ))}
+                              </List>
+                            ) : details[order.id] ? (
+                              <Typography variant="body2" sx={{ opacity: 0.7 }}>Aucun produit listé.</Typography>
+                            ) : null}
+                            <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                              <Button size="small" variant="text" onClick={() => requestRoute({ lat: order.location_lat, lng: order.location_lng })}>
+                                Itinéraire
+                              </Button>
+                              <Button size="small" variant="text" color="inherit" onClick={() => toggleExpanded(order.id)}>
+                                Fermer
+                              </Button>
+                            </Stack>
+                          </Box>
+                        )}
                       </ListItem>
                     )
                   })}
@@ -495,15 +634,33 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
               <Alert severity="success" sx={{ bgcolor: 'rgba(34, 197, 94, 0.12)' }}>
                 Gain cumulé (livraisons complétées) : {completedTotal.toFixed(2)} €
               </Alert>
+              <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                <Button variant="outlined" size="small" onClick={() => setShowHistory((s) => !s)}>
+                  {showHistory ? 'Masquer historique' : 'Historique'}
+                </Button>
+                {showHistory && (
+                  <>
+                    <Button variant="outlined" size="small" color="error" onClick={deleteAllHistory}>
+                      Supprimer tout
+                    </Button>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <input type="date" value={historyDate} onChange={(e) => setHistoryDate(e.target.value)} />
+                      <Button variant="outlined" size="small" color="warning" onClick={deleteByDateHistory}>
+                        Supprimer par jour
+                      </Button>
+                    </Stack>
+                  </>
+                )}
+              </Stack>
               {isFetchingCompleted && <Typography sx={{ opacity: 0.6, mt: 1 }}>Récupération des livraisons terminées…</Typography>}
-              {!completedOrders?.length && !isFetchingCompleted && (
+              {(!showHistory && !todaysCompleted.length) && !isFetchingCompleted && (
                 <Alert severity="info" sx={{ mt: 1 }}>
                   Vous n'avez pas encore marqué de commande comme livrée aujourd'hui.
                 </Alert>
               )}
-              {!!completedOrders?.length && (
+              {showHistory ? (
                 <List>
-                  {completedOrders.map((order) => (
+                  {(completedOrders || []).map((order) => (
                     <ListItem
                       key={`completed-${order.id}`}
                       sx={{
@@ -512,6 +669,11 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
                         bgcolor: 'rgba(21, 94, 49, 0.45)',
                         boxShadow: '0 12px 32px rgba(21,94,49,0.25)',
                       }}
+                      secondaryAction={
+                        <Button size="small" color="error" variant="outlined" onClick={() => deleteOneHistory(order.id)}>
+                          Supprimer
+                        </Button>
+                      }
                     >
                       <ListItemAvatar>
                         <Avatar sx={{ bgcolor: 'success.main' }}>#{order.id}</Avatar>
@@ -523,6 +685,30 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
                     </ListItem>
                   ))}
                 </List>
+              ) : (
+                !!todaysCompleted.length && (
+                  <List>
+                    {todaysCompleted.map((order) => (
+                      <ListItem
+                        key={`completed-today-${order.id}`}
+                        sx={{
+                          mb: 1,
+                          borderRadius: 3,
+                          bgcolor: 'rgba(21, 94, 49, 0.45)',
+                          boxShadow: '0 12px 32px rgba(21,94,49,0.25)',
+                        }}
+                      >
+                        <ListItemAvatar>
+                          <Avatar sx={{ bgcolor: 'success.main' }}>#{order.id}</Avatar>
+                        </ListItemAvatar>
+                        <ListItemText
+                          primary={`Gain : ${parseFloat(order.delivery_price_offer || '0').toFixed(2)} €`}
+                          secondary={`Livrée le ${order.delivered_at ? new Date(order.delivered_at).toLocaleTimeString() : 'Date inconnue'}`}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                )
               )}
             </Box>
           </Stack>
