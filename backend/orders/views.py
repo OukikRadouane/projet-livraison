@@ -7,6 +7,7 @@ from datetime import datetime
 
 from .models import Order
 from .serializers import OrderListSerializer, OrderSerializer, OrderDetailSerializer
+from .optimization import knapsack_branch_and_bound, tsp_nearest_neighbor
 
 
 class OrderCreateView(generics.CreateAPIView):
@@ -194,4 +195,31 @@ class OrderDetailView(generics.RetrieveAPIView):
 		queryset = Order.objects.all()
 		serializer_class = OrderDetailSerializer
 		permission_classes = [permissions.IsAuthenticated]
+
+class OptimizeRouteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not user.role == 'COURIER':
+            return Response({"detail": "Seuls les livreurs peuvent optimiser les trajets."}, status=status.HTTP_403_FORBIDDEN)
+        
+        if user.location_lat is None or user.location_lng is None:
+            return Response({"detail": "La localisation du livreur n'est pas définie."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        courier_location = (user.location_lat, user.location_lng)
+        
+        # Récupérer les commandes pendantes
+        pending_orders = Order.objects.filter(status=Order.Status.PENDING)
+        
+        # Sélectionner les commandes optimales avec Knapsack
+        selected_orders = knapsack_branch_and_bound(user.capacity_kg, list(pending_orders))
+        
+        # Calculer le chemin optimal avec TSP
+        optimal_path = tsp_nearest_neighbor(courier_location, selected_orders)
+        
+        return Response({
+            "selected_orders": OrderListSerializer(selected_orders, many=True).data,
+            "optimal_path": optimal_path
+        })
 

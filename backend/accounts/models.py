@@ -14,6 +14,8 @@ class User(AbstractUser):
 	capacity_kg = models.PositiveIntegerField(default=10, validators=[MaxValueValidator(10)])
 	phone = models.CharField(max_length=32, blank=True, default="")
 	cne = models.CharField(max_length=32, blank=True, default="")
+	location_lat = models.FloatField(null=True, blank=True)
+	location_lng = models.FloatField(null=True, blank=True)
 
 	def is_courier(self) -> bool:
 		return self.role == self.Roles.COURIER

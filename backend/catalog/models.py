@@ -15,3 +15,12 @@ class Item(models.Model):
 	def __str__(self) -> str:
 		return f"{self.name} ({self.category})"
 
+
+class Store(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    location_lat = models.FloatField()
+    location_lng = models.FloatField()
+
+    def __str__(self) -> str:
+        return self.name
+

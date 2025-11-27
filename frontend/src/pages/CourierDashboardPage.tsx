@@ -79,6 +79,9 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
   const [fitTrigger, setFitTrigger] = useState(0)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [details, setDetails] = useState<Record<number, OrderDetail | null>>({})
+  const [optimizeError, setOptimizeError] = useState<string | null>(null)
+  const [optimizedPath, setOptimizedPath] = useState<any>(null)
+  const [selectedOrders, setSelectedOrders] = useState<Order[]>([])
 
   const toggleExpanded = (id: number) => {
     setExpanded((prev) => {
@@ -209,6 +212,32 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
       setStatusError(message)
     },
   })
+
+  const optimizeMutation = useMutation({
+    mutationFn: async () => {
+      if (!token) throw new Error('Non authentifié');
+      if (!myPos) throw new Error('Position actuelle requise pour l\'optimisation.');
+      const response = await axios.post(`${API_BASE}/optimize/`, {
+        current_position: myPos,
+        orders: activeOrders.map(order => ({
+          id: order.id,
+          location: { lat: order.location_lat, lng: order.location_lng }
+        })),
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      return response.data;
+    },
+    onSuccess: (data) => {
+      // Assuming data has optimized_route as array of [lat, lng]
+      setRouteCoords(data.optimized_route);
+      setOptimizeError(null);
+    },
+    onError: (error: unknown) => {
+      const message = axios.isAxiosError(error)
+        ? error.response?.data?.detail || "Échec de l'optimisation."
+        : "Échec de l'optimisation.";
+      setOptimizeError(message);
+    },
+  });
 
   const { data: completedOrders, isFetching: isFetchingCompleted } = useQuery<Order[]>({
     queryKey: ['completedOrders', token],
@@ -380,8 +409,18 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
               <Button variant="outlined" size="small" onClick={() => setFitTrigger((n) => n + 1)}>
                 Ajuster la carte aux commandes
               </Button>
+              <Button 
+                variant="contained" 
+                color="secondary" 
+                size="small" 
+                onClick={() => optimizeMutation.mutate()}
+                disabled={optimizeMutation.isPending}
+              >
+                {optimizeMutation.isPending ? 'Optimisation...' : 'Optimiser'}
+              </Button>
               {geoError && <Alert severity="warning" sx={{ py: 0.5 }}>{geoError}</Alert>}
               {routeError && <Alert severity="error" sx={{ py: 0.5 }}>{routeError}</Alert>}
+              {optimizeError && <Alert severity="error" sx={{ py: 0.5 }}>{optimizeError}</Alert>}
             </Stack>
           </Stack>
           <Box sx={{ height: 400, borderRadius: 2, overflow: 'hidden' }}>
@@ -544,6 +583,9 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
                           </Box>
                         )}
                       </ListItem>
+
+
+
                     )
                   })}
                 </List>

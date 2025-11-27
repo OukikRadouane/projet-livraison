@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
-from catalog.models import Item
+from catalog.models import Item, Store
 
 
 class Order(models.Model):
@@ -27,6 +27,8 @@ class Order(models.Model):
 	restaurant_name = models.CharField(max_length=120, blank=True, default="")
 	restaurant_lat = models.FloatField(null=True, blank=True)
 	restaurant_lng = models.FloatField(null=True, blank=True)
+
+	store = models.ForeignKey(Store, null=True, blank=True, on_delete=models.SET_NULL, related_name="orders")
 
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
