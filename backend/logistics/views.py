@@ -119,8 +119,12 @@ class OptimizedRouteViewSet(viewsets.ModelViewSet):
                 stop.order.status = Order.Status.PENDING
                 stop.order.save()
         
+        serializer = self.get_serializer(route)
         return Response(
-            {"status": "Route désactivée"},
+            {
+                "status": "Route désactivée",
+                "route": serializer.data
+            },
             status=status.HTTP_200_OK
         )
 

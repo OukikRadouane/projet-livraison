@@ -15,7 +15,7 @@ import {
 } from '@mui/material'
 import { useState } from 'react'
 import CustomerOrderPage from './pages/CustomerOrderPage'
-import CourierDashboardPage from './pages/CourierDashboardPage'
+import CourierOptimizationPage from './pages/CourierOptimizationPage'
 import theme from './theme'
 import { SignupDialog, LoginDialog } from './components/AuthDialogs'
 import type { UserProfile } from './components/AuthDialogs'
@@ -104,7 +104,7 @@ function App() {
               </Tabs>
               <Box sx={{ mt: 4 }}>
                 {tab === 0 && <CustomerOrderPage />}
-                {tab === 1 && <CourierDashboardPage token={authToken} user={authUser} onLogout={handleLogout} />}
+                {tab === 1 && <CourierOptimizationPage token={authToken} user={authUser} onLogout={handleLogout} />}
               </Box>
             </Box>
           </Container>
