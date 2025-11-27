@@ -20,6 +20,7 @@ import LocalPhoneRoundedIcon from '@mui/icons-material/LocalPhoneRounded'
 import FmdGoodRoundedIcon from '@mui/icons-material/FmdGoodRounded'
 import MyLocationRoundedIcon from '@mui/icons-material/MyLocationRounded'
 import axios from 'axios'
+import type { UserProfile } from '../components/AuthDialogs'
 
 interface Item {
   id: number
@@ -31,30 +32,48 @@ interface Item {
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api'
 
-export default function CustomerOrderPage() {
+interface Props {
+  token: string | null
+  user: UserProfile | null
+  onRequireAuth: () => void
+}
+
+export default function CustomerOrderPage({ token, user, onRequireAuth }: Props) {
   const qc = useQueryClient()
   const { data: items, isLoading } = useQuery<Item[]>({
     queryKey: ['items'],
     queryFn: async () => (await axios.get(`${API_BASE}/catalog/items/`)).data,
   })
 
-  const [phone, setPhone] = useState('')
+  const [phone, setPhone] = useState(user?.phone || '')
   const [lat, setLat] = useState('')
   const [lng, setLng] = useState('')
   const [offer, setOffer] = useState('')
   const [selectedItems, setSelectedItems] = useState<{ item_id: number; quantity: number }[]>([])
   const [geoLoading, setGeoLoading] = useState(false)
   const [geoError, setGeoError] = useState<string | null>(null)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const trimmedPhone = String(phone).trim()
+  const trimmedLat = String(lat).trim()
+  const trimmedLng = String(lng).trim()
+  const trimmedOffer = String(offer).trim()
+  // const isCustomer = !!user && user.role === 'CUSTOMER'
+  const itemsValid = selectedItems.length > 0 && selectedItems.every((s) => s.quantity >= 1)
+  // Placeholder; will be finalized after orderMutation is declared
+  let canSubmit = !!trimmedPhone && !!trimmedLat && !!trimmedLng && !!trimmedOffer && itemsValid
 
   const orderMutation = useMutation({
-    mutationFn: async () =>
-      axios.post(`${API_BASE}/orders/`, {
+    mutationFn: async () => {
+      const payload = {
         customer_phone: phone,
         location_lat: parseFloat(lat),
         location_lng: parseFloat(lng),
-        delivery_price_offer: offer,
+        delivery_price_offer: String(offer).trim(),
         items: selectedItems,
-      }),
+      }
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+      return axios.post(`${API_BASE}/orders/`, payload, headers ? { headers } : undefined)
+    },
     onSuccess: () => {
       setPhone('')
       setLat('')
@@ -64,7 +83,19 @@ export default function CustomerOrderPage() {
       setGeoError(null)
       qc.invalidateQueries({ queryKey: ['items'] })
     },
+    onError: (e) => {
+      setAuthError(null)
+      if (axios.isAxiosError(e)) {
+        const status = e.response?.status
+        if (status === 403) {
+          setAuthError("Accès refusé.")
+        }
+      }
+    },
   })
+
+  // Finalize canSubmit now that orderMutation exists
+  canSubmit = canSubmit && !orderMutation.isPending
 
   const totalWeight = useMemo(() => {
     if (!items) return 0
@@ -128,7 +159,9 @@ export default function CustomerOrderPage() {
       </Box>
 
       {orderMutation.isSuccess && <Alert severity="success">Votre commande a été transmise, un livreur va l'accepter rapidement.</Alert>}
-      {orderMutation.isError && <Alert severity="error">Impossible d'envoyer la commande. Vérifiez votre connexion.</Alert>}
+      {(orderMutation.isError || authError) && (
+        <Alert severity="error">{authError || "Impossible d'envoyer la commande. Vérifiez votre connexion."}</Alert>
+      )}
 
       <Card className="glass-panel">
         <CardHeader
@@ -282,11 +315,24 @@ export default function CustomerOrderPage() {
             <Button
               variant="contained"
               size="large"
-              onClick={() => orderMutation.mutate()}
-              disabled={!phone || !lat || !lng || !offer || selectedItems.length === 0 || orderMutation.isPending}
+              onClick={() => {
+                setAuthError(null)
+                if (!token) {
+                  onRequireAuth()
+                  return
+                }
+                orderMutation.mutate()
+              }}
+              disabled={!canSubmit}
             >
               {orderMutation.isPending ? 'Envoi en cours…' : 'Envoyer la commande'}
             </Button>
+            {!trimmedPhone && <Typography variant="caption" sx={{ opacity: 0.7 }}>• Renseignez votre téléphone</Typography>}
+            {!trimmedLat && <Typography variant="caption" sx={{ opacity: 0.7 }}>• Renseignez la latitude (ou utilisez la position)</Typography>}
+            {!trimmedLng && <Typography variant="caption" sx={{ opacity: 0.7 }}>• Renseignez la longitude (ou utilisez la position)</Typography>}
+            {!trimmedOffer && <Typography variant="caption" sx={{ opacity: 0.7 }}>• Indiquez l'offre de livraison</Typography>}
+            {!itemsValid && <Typography variant="caption" sx={{ opacity: 0.7 }}>• Ajoutez au moins un article avec quantité ≥ 1</Typography>}
+            {/* Removed role-based hint to allow couriers to open the gateway when not logged in */}
           </Stack>
         </CardContent>
       </Card>

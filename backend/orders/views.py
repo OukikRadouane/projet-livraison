@@ -7,12 +7,30 @@ from datetime import datetime
 
 from .models import Order
 from .serializers import OrderListSerializer, OrderSerializer, OrderDetailSerializer
+from logistics.optimizer import order_distance_km, knapsack_max_profit, nearest_neighbor_route
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
 
 
 class OrderCreateView(generics.CreateAPIView):
 	queryset = Order.objects.all()
 	serializer_class = OrderSerializer
 	permission_classes = [permissions.AllowAny]
+	authentication_classes = []
+
+	def create(self, request, *args, **kwargs):
+		user = getattr(request, "user", None)
+		data = request.data.copy()
+		# If authenticated and phone missing, default from profile
+		if getattr(user, "is_authenticated", False):
+			if not data.get("customer_phone") and getattr(user, "phone", ""):
+				data["customer_phone"] = user.phone
+		serializer = self.get_serializer(data=data)
+		serializer.is_valid(raise_exception=True)
+		self.perform_create(serializer)
+		headers = self.get_success_headers(serializer.data)
+		return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
 class PendingOrdersListView(generics.ListAPIView):
@@ -194,4 +212,50 @@ class OrderDetailView(generics.RetrieveAPIView):
 		queryset = Order.objects.all()
 		serializer_class = OrderDetailSerializer
 		permission_classes = [permissions.IsAuthenticated]
+
+
+
+class CourierOptimizeView(APIView):
+	permission_classes = [permissions.IsAuthenticated]
+
+	def post(self, request, *args, **kwargs):
+		# Expect body: { "courier": {"lat": float, "lng": float}, "capacity_km": float }
+		# Uses current user's pending orders as candidates
+		data = request.data or {}
+		courier_lat = data.get("courier", {}).get("lat")
+		courier_lng = data.get("courier", {}).get("lng")
+		capacity_km = float(data.get("capacity_km", 10.0))
+		if courier_lat is None or courier_lng is None:
+			return Response({"detail": "courier.lat and courier.lng are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+		courier_pos = (float(courier_lat), float(courier_lng))
+
+		# Candidate orders: pending and nearby/available; here we use all pending
+		candidates = Order.objects.filter(status=Order.Status.PENDING)
+		items = []
+		points = []
+		for o in candidates:
+			customer = (o.location_lat, o.location_lng)
+			restaurant = (o.restaurant_lat, o.restaurant_lng) if o.restaurant_lat is not None and o.restaurant_lng is not None else None
+			dist_km = order_distance_km(courier_pos, customer, restaurant)
+			profit = float(o.delivery_price_offer)
+			items.append({"id": o.id, "profit": profit, "distance_km": dist_km, "customer": customer})
+			points.append(customer)
+
+		selected = knapsack_max_profit(items, capacity_km)
+		# Build route via nearest neighbor from courier to customers of selected orders
+		selected_points = [item["customer"] for item in selected]
+		route_order_indices = nearest_neighbor_route(courier_pos, selected_points) if selected_points else []
+		ordered_ids = [selected[idx]["id"] for idx in route_order_indices] if route_order_indices else [i["id"] for i in selected]
+
+		total_profit = sum(i["profit"] for i in selected)
+		total_distance = sum(i["distance_km"] for i in selected)
+
+		return Response({
+			"selected_order_ids": ordered_ids,
+			"total_profit": total_profit,
+			"total_distance_km": total_distance,
+			"capacity_km": capacity_km,
+			"count": len(selected),
+		})
 

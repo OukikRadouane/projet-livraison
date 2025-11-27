@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db import IntegrityError
 from django.contrib.auth.password_validation import validate_password
 
 from .models import User
@@ -55,7 +56,33 @@ class SignupSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        # Normalize and prepare username from email if missing
+        email = (attrs.get("email") or "").strip()
+        username = (attrs.get("username") or email).strip()
+        attrs["email"] = email
+        attrs["username"] = username
+
+        # Friendly validation for duplicate username (we use email as username)
+        if username:
+            from .models import User  # local import to avoid circulars at import time
+            if User.objects.filter(username=username).exists():
+                raise serializers.ValidationError({
+                    "email": "Un compte avec cet email existe déjà. Veuillez vous connecter."
+                })
+
         role = attrs.get("role", User.Roles.CUSTOMER)
+        # For both roles we now require first_name, last_name, phone
+        required_common = {
+            "first_name": "Le prénom est requis.",
+            "last_name": "Le nom est requis.",
+            "phone": "Le téléphone est requis.",
+        }
+        missing_fields = {}
+        for field, message in required_common.items():
+            value = (attrs.get(field) or "").strip()
+            attrs[field] = value
+            if not value:
+                missing_fields[field] = message
         if role == User.Roles.COURIER:
             missing_fields = {}
             for field, message in {
@@ -72,8 +99,11 @@ class SignupSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(missing_fields)
             attrs["capacity_kg"] = 10
         else:
+            # Customer: must have first_name, last_name, phone; CNE optional
+            if missing_fields:
+                raise serializers.ValidationError(missing_fields)
             attrs["capacity_kg"] = 0
-            for field in ("first_name", "last_name", "phone", "cne"):
+            for field in ("cne",):
                 attrs[field] = (attrs.get(field) or "").strip()
         return attrs
 
@@ -91,5 +121,11 @@ class SignupSerializer(serializers.ModelSerializer):
             validated_data["capacity_kg"] = 0
         user = User(**validated_data)
         user.set_password(password)
-        user.save()
+        try:
+            user.save()
+        except IntegrityError:
+            # In case of race condition, surface a friendly error
+            raise serializers.ValidationError({
+                "email": "Un compte avec cet email existe déjà. Veuillez vous connecter."
+            })
         return user

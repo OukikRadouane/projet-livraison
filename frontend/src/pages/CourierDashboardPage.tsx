@@ -20,6 +20,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
+import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded'
 import DirectionsBikeRoundedIcon from '@mui/icons-material/DirectionsBikeRounded'
@@ -78,6 +79,8 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
   const [routeError, setRouteError] = useState<string | null>(null)
   const [fitTrigger, setFitTrigger] = useState(0)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [optCapacityKm, setOptCapacityKm] = useState<number>(10)
+  const [optSuggested, setOptSuggested] = useState<number[] | null>(null)
   const [details, setDetails] = useState<Record<number, OrderDetail | null>>({})
 
   const toggleExpanded = (id: number) => {
@@ -372,6 +375,40 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
               <Button variant="contained" size="small" onClick={handleUseMyLocation} disabled={geoLoading}>
                 {geoLoading ? 'Localisation…' : 'Centrer sur ma position'}
               </Button>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <TextField
+                  label="Distance max (km)"
+                  type="number"
+                  size="small"
+                  value={optCapacityKm}
+                  onChange={(e) => setOptCapacityKm(Number(e.target.value) || 0)}
+                />
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={async () => {
+                    if (!navigator.geolocation) {
+                      alert("La géolocalisation n'est pas disponible")
+                      return
+                    }
+                    navigator.geolocation.getCurrentPosition(async (pos) => {
+                      const lat = pos.coords.latitude
+                      const lng = pos.coords.longitude
+                      try {
+                        const res = await axios.post(
+                          `${API_BASE}/orders/courier/optimize/`,
+                          { courier: { lat, lng }, capacity_km: optCapacityKm },
+                          token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+                        )
+                        setOptSuggested(res.data?.selected_order_ids || [])
+                      } catch (err) {
+                        console.error(err)
+                        alert("Échec de l'optimisation")
+                      }
+                    }, () => alert("Impossible d'obtenir votre position"))
+                  }}
+                >Optimiser</Button>
+              </Stack>
               {routeCoords && (
                 <Button variant="outlined" size="small" color="info" onClick={() => setRouteCoords(null)} disabled={routeLoading}>
                   Effacer l'itinéraire
@@ -497,6 +534,9 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
                               >
                                 <ChevronRightRoundedIcon fontSize="small" />
                               </IconButton>
+                              {optSuggested && optSuggested.includes(order.id) && (
+                                <Chip label="Priorité" color="primary" size="small" />
+                              )}
                             </Stack>
                           }
                           secondary={`Poids estimé ${order.total_weight_kg.toFixed(2)} kg · Offre ${order.delivery_price_offer} €`}
