@@ -43,6 +43,13 @@ function App() {
     } catch {}
   }, [])
 
+  // Reset tab when user changes role or logs out
+  useEffect(() => {
+    if (!authUser || authUser.role !== 'COURIER') {
+      setTab(0)
+    }
+  }, [authUser])
+
   // Persist auth to localStorage when it changes
   useEffect(() => {
     try {
@@ -115,7 +122,7 @@ function App() {
               }}
             >
               <Tabs
-                value={tab}
+                value={authUser?.role === 'COURIER' && tab === 1 ? 1 : 0}
                 onChange={(_, v) => setTab(v)}
                 textColor="inherit"
                 indicatorColor="secondary"

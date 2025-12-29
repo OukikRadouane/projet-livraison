@@ -28,6 +28,8 @@ import LoginRoundedIcon from '@mui/icons-material/LoginRounded'
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded'
 import PaidRoundedIcon from '@mui/icons-material/PaidRounded'
 import axios from 'axios'
+import RouteOptimizationDetails from '../components/RouteOptimizationDetails'
+import OptimizedRouteDisplay from '../components/OptimizedRouteDisplay'
 import type { UserProfile } from '../components/AuthDialogs'
 import 'leaflet/dist/leaflet.css'
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, Polyline } from 'react-leaflet'
@@ -81,7 +83,9 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [optCapacityKm, setOptCapacityKm] = useState<number>(10)
   const [optSuggested, setOptSuggested] = useState<number[] | null>(null)
+  const [optimizationResult, setOptimizationResult] = useState<any>(null)
   const [details, setDetails] = useState<Record<number, OrderDetail | null>>({})
+  const [optimizedRoute, setOptimizedRoute] = useState<Array<[number, number]> | null>(null)
 
   const toggleExpanded = (id: number) => {
     setExpanded((prev) => {
@@ -387,6 +391,7 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
                   variant="contained"
                   size="small"
                   onClick={async () => {
+                    console.log('Optimiser clicked')
                     if (!navigator.geolocation) {
                       alert("La géolocalisation n'est pas disponible")
                       return
@@ -394,18 +399,48 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
                     navigator.geolocation.getCurrentPosition(async (pos) => {
                       const lat = pos.coords.latitude
                       const lng = pos.coords.longitude
+                      console.log('Position:', lat, lng)
                       try {
+                        console.log('Sending request to optimize...')
                         const res = await axios.post(
                           `${API_BASE}/orders/courier/optimize/`,
                           { courier: { lat, lng }, capacity_km: optCapacityKm },
                           token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
                         )
+                        console.log('Optimize response:', res.data)
                         setOptSuggested(res.data?.selected_order_ids || [])
+                        setOptimizationResult(res.data)
+                        
+                        // Set optimized route coordinates
+                        if (res.data?.full_route_coordinates) {
+                          setOptimizedRoute(res.data.full_route_coordinates)
+                        }
+                        
+                        const details = [
+                          `Algorithme: ${res.data?.algorithm || 'Realistic Delivery Optimizer'}`,
+                          `Commandes sélectionnées: ${res.data?.count || 0}`,
+                          `Profit total: ${res.data?.total_profit?.toFixed(2) || 0}€`,
+                          `Distance totale: ${res.data?.total_distance_km?.toFixed(2) || 0}km`,
+                          `Poids total: ${res.data?.total_weight_kg?.toFixed(2) || 0}kg`,
+                          `Durée estimée: ${res.data?.estimated_duration_min || 0} min`
+                        ].join('\n')
+                        
+                        if (res.data?.count > 0) {
+                          alert(`Optimisation réussie!\n\n${details}`)
+                        } else {
+                          alert(`Aucune commande sélectionnée.\n\nVérifiez:\n- Qu'il y a des commandes en attente\n- Votre position GPS\n- Les contraintes de distance`)
+                        }
                       } catch (err) {
-                        console.error(err)
-                        alert("Échec de l'optimisation")
+                        console.error('Optimize error:', err)
+                        const errorMsg = axios.isAxiosError(err) 
+                          ? err.response?.data?.detail || err.message 
+                          : 'Erreur inconnue'
+                        alert(`Échec de l'optimisation: ${errorMsg}`)
                       }
-                    }, () => alert("Impossible d'obtenir votre position"))
+                    }, (err) => {
+                      console.error('Geolocation error:', err)
+                      alert("Impossible d'obtenir votre position")
+                    })
                   }}
                 >Optimiser</Button>
               </Stack>
@@ -427,12 +462,29 @@ export default function CourierDashboardPage({ token, user, onLogout }: Props) {
               active={activeOrders || []}
               myPos={myPos}
               route={routeCoords}
+              optimizedRoute={optimizedRoute}
               onRequestRoute={requestRoute}
               fitTrigger={fitTrigger}
             />
           </Box>
+          <RouteOptimizationDetails 
+            result={optimizationResult} 
+            onClose={() => setOptimizationResult(null)} 
+          />
+          {optimizationResult?.route_details && (
+            <OptimizedRouteDisplay
+              routeDetails={optimizationResult.route_details}
+              totalDistance={optimizationResult.total_distance || 0}
+              totalProfit={optimizationResult.total_profit || 0}
+              onClose={() => {
+                setOptimizationResult(null)
+                setOptimizedRoute(null)
+              }}
+            />
+          )}
           <Typography variant="caption" sx={{ opacity: 0.7 }}>
-            • Orange: commandes en attente · • Vert: commandes acceptées
+            • 🟠 Commandes en attente • 🟢 Commandes acceptées • 🔴 Itinéraire optimisé<br/>
+            • 🚀 Départ • 🏪 Récupération • 🏠 Livraison • 🏁 Fin • ➡️ Direction
           </Typography>
         </CardContent>
       </Card>
@@ -763,11 +815,12 @@ type OrdersMapProps = {
   active: Order[]
   myPos: { lat: number; lng: number } | null
   route: Array<[number, number]> | null
+  optimizedRoute: Array<[number, number]> | null
   onRequestRoute: (dest: { lat: number; lng: number }) => void
   fitTrigger: number
 }
 
-function OrdersMap({ pending, active, myPos, route, onRequestRoute, fitTrigger }: OrdersMapProps) {
+function OrdersMap({ pending, active, myPos, route, optimizedRoute, onRequestRoute, fitTrigger }: OrdersMapProps) {
   // Center: average of all points, fallback to a default city center
   const all = [...pending, ...active]
   const avgLat = all.length ? all.reduce((a, o) => a + (o.location_lat || 0), 0) / all.length : 33.5731
@@ -781,10 +834,12 @@ function OrdersMap({ pending, active, myPos, route, onRequestRoute, fitTrigger }
       />
       <PanTo position={myPos} />
       <FitToMarkers points={all.map(o => [o.location_lat, o.location_lng] as [number, number])} trigger={fitTrigger} extra={myPos ? [[myPos.lat, myPos.lng] as [number, number]] : []} />
+      
+      {/* Commandes en attente - Orange */}
       {pending.map((o) => (
-        <CircleMarker key={`p-${o.id}`} center={[o.location_lat, o.location_lng]} radius={10} pathOptions={{ color: '#f59e0b' }}>
+        <CircleMarker key={`p-${o.id}`} center={[o.location_lat, o.location_lng]} radius={8} pathOptions={{ color: '#f59e0b', fillColor: '#fef3c7', fillOpacity: 0.8 }}>
           <Popup>
-            <strong>Commande #{o.id}</strong><br />
+            <strong>📦 Commande #{o.id}</strong><br />
             Poids: {o.total_weight_kg.toFixed(2)} kg<br />
             Offre: {o.delivery_price_offer} €<br />
             Statut: {o.status}
@@ -794,10 +849,12 @@ function OrdersMap({ pending, active, myPos, route, onRequestRoute, fitTrigger }
           </Popup>
         </CircleMarker>
       ))}
+      
+      {/* Commandes actives - Vert */}
       {active.map((o) => (
-        <CircleMarker key={`a-${o.id}`} center={[o.location_lat, o.location_lng]} radius={10} pathOptions={{ color: '#22c55e' }}>
+        <CircleMarker key={`a-${o.id}`} center={[o.location_lat, o.location_lng]} radius={8} pathOptions={{ color: '#22c55e', fillColor: '#dcfce7', fillOpacity: 0.8 }}>
           <Popup>
-            <strong>En cours #{o.id}</strong><br />
+            <strong>🚚 En cours #{o.id}</strong><br />
             Poids: {o.total_weight_kg.toFixed(2)} kg<br />
             Offre: {o.delivery_price_offer} €<br />
             Statut: {o.status}
@@ -807,13 +864,97 @@ function OrdersMap({ pending, active, myPos, route, onRequestRoute, fitTrigger }
           </Popup>
         </CircleMarker>
       ))}
+      
+      {/* Position du livreur - Bleu */}
       {myPos && (
-        <CircleMarker center={[myPos.lat, myPos.lng]} radius={8} pathOptions={{ color: '#3b82f6' }}>
-          <Popup>Ma position actuelle</Popup>
+        <CircleMarker center={[myPos.lat, myPos.lng]} radius={10} pathOptions={{ color: '#3b82f6', fillColor: '#dbeafe', fillOpacity: 0.9 }}>
+          <Popup><strong>📍 Ma position actuelle</strong></Popup>
         </CircleMarker>
       )}
+      
+      {/* Itinéraire simple - Bleu */}
       {route && route.length > 1 && (
-        <Polyline positions={route} pathOptions={{ color: '#3b82f6', weight: 4 }} />
+        <Polyline positions={route} pathOptions={{ color: '#3b82f6', weight: 4, opacity: 0.7 }} />
+      )}
+      
+      {/* Itinéraire optimisé avec étapes numérotées */}
+      {optimizedRoute && optimizedRoute.length > 1 && (
+        <>
+          {/* Ligne principale rouge */}
+          <Polyline positions={optimizedRoute} pathOptions={{ color: '#ef4444', weight: 5, opacity: 0.8 }} />
+          
+          {/* Points numérotés pour chaque étape */}
+          {optimizedRoute.map((coord, index) => {
+            const isStart = index === 0
+            const isEnd = index === optimizedRoute.length - 1
+            const isPickup = index % 2 === 1 && !isEnd // Impair = pickup
+            const isDelivery = index % 2 === 0 && !isStart && !isEnd // Pair = delivery
+            
+            let icon = '📍'
+            let color = '#ef4444'
+            let fillColor = '#fef2f2'
+            let description = `Étape ${index + 1}`
+            
+            if (isStart) {
+              icon = '🚀'
+              color = '#3b82f6'
+              fillColor = '#dbeafe'
+              description = 'Départ livreur'
+            } else if (isPickup) {
+              icon = '🏪'
+              color = '#f59e0b'
+              fillColor = '#fef3c7'
+              description = `Récupération ${Math.ceil(index / 2)}`
+            } else if (isDelivery) {
+              icon = '🏠'
+              color = '#22c55e'
+              fillColor = '#dcfce7'
+              description = `Livraison ${index / 2}`
+            } else if (isEnd) {
+              icon = '🏁'
+              color = '#8b5cf6'
+              fillColor = '#f3e8ff'
+              description = 'Fin de tournée'
+            }
+            
+            return (
+              <CircleMarker 
+                key={`route-${index}`} 
+                center={[coord[0], coord[1]]} 
+                radius={12} 
+                pathOptions={{ color, fillColor, fillOpacity: 0.9, weight: 3 }}
+              >
+                <Popup>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '20px', marginBottom: '5px' }}>{icon}</div>
+                    <strong>{description}</strong><br />
+                    <small>Étape {index + 1}/{optimizedRoute.length}</small>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            )
+          })}
+          
+          {/* Flèches directionnelles sur la ligne */}
+          {optimizedRoute.slice(0, -1).map((coord, index) => {
+            const nextCoord = optimizedRoute[index + 1]
+            const midLat = (coord[0] + nextCoord[0]) / 2
+            const midLng = (coord[1] + nextCoord[1]) / 2
+            
+            return (
+              <CircleMarker 
+                key={`arrow-${index}`}
+                center={[midLat, midLng]}
+                radius={4}
+                pathOptions={{ color: '#ef4444', fillColor: '#ffffff', fillOpacity: 1, weight: 2 }}
+              >
+                <Popup>
+                  <small>➡️ Direction étape {index + 2}</small>
+                </Popup>
+              </CircleMarker>
+            )
+          })}
+        </>
       )}
     </MapContainer>
   )

@@ -11,7 +11,7 @@ class User(AbstractUser):
 	role = models.CharField(
 		max_length=16, choices=Roles.choices, default=Roles.CUSTOMER
 	)
-	capacity_kg = models.PositiveIntegerField(default=10, validators=[MaxValueValidator(10)])
+	capacity_kg = models.PositiveIntegerField(default=0, validators=[MaxValueValidator(10)])
 	phone = models.CharField(max_length=32, blank=True, default="")
 	cne = models.CharField(max_length=32, blank=True, default="")
 

@@ -7,7 +7,7 @@ from datetime import datetime
 
 from .models import Order
 from .serializers import OrderListSerializer, OrderSerializer, OrderDetailSerializer
-from logistics.optimizer import order_distance_km, knapsack_max_profit, nearest_neighbor_route
+from logistics.advanced_optimizer import AdvancedDeliveryOptimizer
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -180,13 +180,57 @@ class UpdateOrderStatusView(APIView):
 			return Response({"detail": "Cette commande n'est pas associée à votre compte."}, status=status.HTTP_403_FORBIDDEN)
 		if status_value not in allowed:
 			return Response({"detail": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# Store previous status for optimization trigger
+		previous_status = order.status
+		
 		order.status = status_value
 		if status_value == Order.Status.DELIVERED:
 			order.delivered_at = timezone.now()
 		else:
 			order.delivered_at = None
 		order.save(update_fields=["status", "delivered_at"])
+		
+		# Auto-trigger optimization when order is delivered
+		if status_value == Order.Status.DELIVERED and previous_status != Order.Status.DELIVERED:
+			self._trigger_auto_optimization(user)
+		
 		return Response(OrderListSerializer(order).data)
+	
+	def _trigger_auto_optimization(self, courier):
+		"""Auto-trigger optimization after delivery completion"""
+		try:
+			# Get courier's remaining active orders
+			active_orders = Order.objects.filter(
+				courier=courier,
+				status__in=[Order.Status.ASSIGNED, Order.Status.PICKED_UP]
+			)
+			
+			# If courier has remaining capacity, suggest new orders
+			if active_orders.count() < 3:  # Max 3 orders simultaneously
+				current_weight = sum(o.estimated_weight_kg() for o in active_orders)
+				remaining_capacity = courier.capacity_kg - current_weight
+				
+				if remaining_capacity > 1.0:  # At least 1kg remaining
+					# Get pending orders that fit remaining capacity
+					pending_orders = Order.objects.filter(
+						status=Order.Status.PENDING
+					).exclude(
+						total_weight_kg__gt=remaining_capacity
+					)[:5]  # Limit to 5 candidates
+					
+					# Simple auto-assignment of best profit/weight ratio
+					if pending_orders.exists():
+						best_order = max(pending_orders, 
+							key=lambda o: float(o.delivery_price_offer) / max(o.estimated_weight_kg(), 0.1))
+						
+						# Auto-assign if profitable
+						if float(best_order.delivery_price_offer) > 10.0:  # Min 10€ profit
+							best_order.courier = courier
+							best_order.status = Order.Status.ASSIGNED
+							best_order.save(update_fields=["courier", "status"])
+		except Exception:
+			pass  # Silent fail for auto-optimization
 
 
 class CourierCancelOrderView(APIView):
@@ -220,42 +264,80 @@ class CourierOptimizeView(APIView):
 
 	def post(self, request, *args, **kwargs):
 		# Expect body: { "courier": {"lat": float, "lng": float}, "capacity_km": float }
-		# Uses current user's pending orders as candidates
 		data = request.data or {}
-		courier_lat = data.get("courier", {}).get("lat")
-		courier_lng = data.get("courier", {}).get("lng")
+		courier_data = data.get("courier", {})
+		courier_lat = courier_data.get("lat")
+		courier_lng = courier_data.get("lng")
 		capacity_km = float(data.get("capacity_km", 10.0))
+		
 		if courier_lat is None or courier_lng is None:
 			return Response({"detail": "courier.lat and courier.lng are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-		courier_pos = (float(courier_lat), float(courier_lng))
+		try:
+			courier_pos = (float(courier_lat), float(courier_lng))
+			# Validate GPS coordinates
+			if not (-90 <= courier_pos[0] <= 90) or not (-180 <= courier_pos[1] <= 180):
+				return Response({"detail": "Invalid GPS coordinates"}, status=status.HTTP_400_BAD_REQUEST)
+		except (ValueError, TypeError):
+			return Response({"detail": "Invalid courier coordinates"}, status=status.HTTP_400_BAD_REQUEST)
 
-		# Candidate orders: pending and nearby/available; here we use all pending
+		# Get pending orders AND active orders for this courier
 		candidates = Order.objects.filter(status=Order.Status.PENDING)
-		items = []
-		points = []
-		for o in candidates:
-			customer = (o.location_lat, o.location_lng)
-			restaurant = (o.restaurant_lat, o.restaurant_lng) if o.restaurant_lat is not None and o.restaurant_lng is not None else None
-			dist_km = order_distance_km(courier_pos, customer, restaurant)
-			profit = float(o.delivery_price_offer)
-			items.append({"id": o.id, "profit": profit, "distance_km": dist_km, "customer": customer})
-			points.append(customer)
+		active_orders = Order.objects.filter(
+			courier=request.user,
+			status__in=[Order.Status.ASSIGNED, Order.Status.PICKED_UP]
+		)
+		
+		orders_data = []
+		
+		print(f"DEBUG: Found {candidates.count()} pending + {active_orders.count()} active orders")
+		
+		# Add pending orders
+		for order in candidates:
+			order_data = {
+				"id": order.id,
+				"location_lat": order.location_lat,
+				"location_lng": order.location_lng,
+				"total_weight_kg": order.estimated_weight_kg(),
+				"delivery_price_offer": str(order.delivery_price_offer),
+				"customer_phone": order.customer_phone,
+				"status": "PENDING"
+			}
+			orders_data.append(order_data)
+			print(f"DEBUG: Pending Order {order.id}")
+		
+		# Add active orders (already accepted)
+		for order in active_orders:
+			order_data = {
+				"id": order.id,
+				"location_lat": order.location_lat,
+				"location_lng": order.location_lng,
+				"total_weight_kg": order.estimated_weight_kg(),
+				"delivery_price_offer": str(order.delivery_price_offer),
+				"customer_phone": order.customer_phone,
+				"status": order.status
+			}
+			orders_data.append(order_data)
+			print(f"DEBUG: Active Order {order.id} - Status: {order.status}")
 
-		selected = knapsack_max_profit(items, capacity_km)
-		# Build route via nearest neighbor from courier to customers of selected orders
-		selected_points = [item["customer"] for item in selected]
-		route_order_indices = nearest_neighbor_route(courier_pos, selected_points) if selected_points else []
-		ordered_ids = [selected[idx]["id"] for idx in route_order_indices] if route_order_indices else [i["id"] for i in selected]
-
-		total_profit = sum(i["profit"] for i in selected)
-		total_distance = sum(i["distance_km"] for i in selected)
+		# Use realistic optimizer instead of advanced optimizer
+		from logistics.realistic_optimizer import RealisticDeliveryOptimizer
+		optimizer = RealisticDeliveryOptimizer()
+		result = optimizer.optimize_realistic_route(
+			courier_pos=courier_pos,
+			orders_data=orders_data
+		)
 
 		return Response({
-			"selected_order_ids": ordered_ids,
-			"total_profit": total_profit,
-			"total_distance_km": total_distance,
+			"selected_order_ids": result["selected_order_ids"],
+			"total_profit": result["total_profit"],
+			"total_distance_km": result["total_distance"],
+			"total_weight_kg": result["total_weight"],
+			"estimated_duration_min": result["estimated_duration_min"],
 			"capacity_km": capacity_km,
-			"count": len(selected),
+			"count": len(result["selected_order_ids"]),
+			"route_details": result.get("route_details", []),
+			"full_route_coordinates": result.get("full_route_coordinates", []),
+			"algorithm": "Realistic Delivery Optimizer"
 		})
 

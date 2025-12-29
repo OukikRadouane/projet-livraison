@@ -143,7 +143,7 @@ export default function CustomerOrderPage({ token, user, onRequireAuth }: Props)
         setGeoError(messages[error.code] || 'Impossible de récupérer votre position.')
         setGeoLoading(false)
       },
-      { enableHighAccuracy: true, timeout: 10000 },
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 60000 },
     )
   }
 

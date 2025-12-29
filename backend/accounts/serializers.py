@@ -62,49 +62,20 @@ class SignupSerializer(serializers.ModelSerializer):
         attrs["email"] = email
         attrs["username"] = username
 
-        # Friendly validation for duplicate username (we use email as username)
+        # Check for duplicate username
         if username:
-            from .models import User  # local import to avoid circulars at import time
+            from .models import User
             if User.objects.filter(username=username).exists():
                 raise serializers.ValidationError({
-                    "email": "Un compte avec cet email existe déjà. Veuillez vous connecter."
+                    "email": "Un compte avec cet email existe déjà."
                 })
 
         role = attrs.get("role", User.Roles.CUSTOMER)
-        # For both roles we now require first_name, last_name, phone
-        required_common = {
-            "first_name": "Le prénom est requis.",
-            "last_name": "Le nom est requis.",
-            "phone": "Le téléphone est requis.",
-        }
-        missing_fields = {}
-        for field, message in required_common.items():
-            value = (attrs.get(field) or "").strip()
-            attrs[field] = value
-            if not value:
-                missing_fields[field] = message
         if role == User.Roles.COURIER:
-            missing_fields = {}
-            for field, message in {
-                "first_name": "Le prénom est requis pour un livreur.",
-                "last_name": "Le nom est requis pour un livreur.",
-                "phone": "Le téléphone est requis pour un livreur.",
-                "cne": "Le CNE est requis pour un livreur.",
-            }.items():
-                value = (attrs.get(field) or "").strip()
-                attrs[field] = value
-                if not value:
-                    missing_fields[field] = message
-            if missing_fields:
-                raise serializers.ValidationError(missing_fields)
             attrs["capacity_kg"] = 10
         else:
-            # Customer: must have first_name, last_name, phone; CNE optional
-            if missing_fields:
-                raise serializers.ValidationError(missing_fields)
             attrs["capacity_kg"] = 0
-            for field in ("cne",):
-                attrs[field] = (attrs.get(field) or "").strip()
+            
         return attrs
 
     def create(self, validated_data):
