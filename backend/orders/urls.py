@@ -8,6 +8,7 @@ from .views import (
     CourierDeleteCompletedOneView,
     CourierCancelOrderView,
     CourierOptimizeView,
+    CustomerOrdersView,
     OrderCreateView,
     OrderDetailView,
     PendingOrdersListView,
@@ -17,6 +18,7 @@ from .views import (
 urlpatterns = [
     path("", OrderCreateView.as_view(), name="order-create"),
     path("<int:pk>/", OrderDetailView.as_view(), name="order-detail"),
+    path("customer/", CustomerOrdersView.as_view(), name="customer-orders"),
     path("pending/", PendingOrdersListView.as_view(), name="orders-pending"),
     path("courier/active/", CourierActiveOrdersView.as_view(), name="orders-active"),
     path("courier/completed/", CourierCompletedOrdersView.as_view(), name="orders-completed"),

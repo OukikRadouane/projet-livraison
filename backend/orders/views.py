@@ -11,6 +11,18 @@ from logistics.advanced_optimizer import AdvancedDeliveryOptimizer
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from notifications.models import Notification
+
+
+class CustomerOrdersView(generics.ListAPIView):
+	serializer_class = OrderDetailSerializer
+	permission_classes = [permissions.AllowAny]
+
+	def get_queryset(self):
+		phone = self.request.query_params.get('phone')
+		if not phone:
+			return Order.objects.none()
+		return Order.objects.filter(customer_phone=phone).order_by('-created_at')
 
 
 class OrderCreateView(generics.CreateAPIView):
@@ -190,6 +202,15 @@ class UpdateOrderStatusView(APIView):
 		else:
 			order.delivered_at = None
 		order.save(update_fields=["status", "delivered_at"])
+		
+		# Send notification to customer when order is picked up
+		if status_value == Order.Status.PICKED_UP and previous_status != Order.Status.PICKED_UP:
+			Notification.objects.create(
+				phone=order.customer_phone,
+				order=order,
+				type=Notification.Type.ORDER_PICKED_UP,
+				message=f"Votre commande #{order.id} a été ramassée par le livreur et est en route."
+			)
 		
 		# Auto-trigger optimization when order is delivered
 		if status_value == Order.Status.DELIVERED and previous_status != Order.Status.DELIVERED:

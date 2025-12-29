@@ -14,6 +14,8 @@ import {
   Typography,
   MenuItem,
   InputAdornment,
+  Tabs,
+  Tab,
 } from '@mui/material'
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
 import LocalPhoneRoundedIcon from '@mui/icons-material/LocalPhoneRounded'
@@ -30,6 +32,15 @@ interface Item {
   weight_per_unit_kg: number
 }
 
+interface Order {
+  id: number
+  customer_phone: string
+  status: string
+  delivery_price_offer: string
+  created_at: string
+  items: { item_id: number; name: string; quantity: number }[]
+}
+
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api'
 
 interface Props {
@@ -40,9 +51,16 @@ interface Props {
 
 export default function CustomerOrderPage({ token, user, onRequireAuth }: Props) {
   const qc = useQueryClient()
+  const [tab, setTab] = useState(0)
   const { data: items, isLoading } = useQuery<Item[]>({
     queryKey: ['items'],
     queryFn: async () => (await axios.get(`${API_BASE}/catalog/items/`)).data,
+  })
+
+  const { data: orders } = useQuery<Order[]>({
+    queryKey: ['customer-orders', user?.phone],
+    queryFn: async () => (await axios.get(`${API_BASE}/orders/customer/?phone=${user?.phone}`)).data,
+    enabled: !!user?.phone,
   })
 
   const [phone, setPhone] = useState(user?.phone || '')
@@ -82,6 +100,7 @@ export default function CustomerOrderPage({ token, user, onRequireAuth }: Props)
       setSelectedItems([])
       setGeoError(null)
       qc.invalidateQueries({ queryKey: ['items'] })
+      qc.invalidateQueries({ queryKey: ['customer-orders'] })
     },
     onError: (e) => {
       setAuthError(null)
@@ -147,16 +166,44 @@ export default function CustomerOrderPage({ token, user, onRequireAuth }: Props)
     )
   }
 
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'PENDING': return 'warning'
+      case 'ASSIGNED': return 'info'
+      case 'PICKED_UP': return 'secondary'
+      case 'DELIVERED': return 'success'
+      default: return 'default'
+    }
+  }
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'PENDING': return 'En attente'
+      case 'ASSIGNED': return 'Assignée'
+      case 'PICKED_UP': return 'Ramassée'
+      case 'DELIVERED': return 'Livrée'
+      default: return status
+    }
+  }
+
   return (
     <Stack spacing={3}>
       <Box>
         <Typography variant="h4" fontWeight={600} gutterBottom>
-          Commande express
+          Espace Client
         </Typography>
         <Typography variant="body1" sx={{ opacity: 0.75 }}>
-          Choisissez vos produits frais, indiquez votre localisation et proposez un prix pour la livraison.
+          Passez une nouvelle commande ou suivez vos commandes existantes.
         </Typography>
       </Box>
+
+      <Tabs value={tab} onChange={(_, v) => setTab(v)} textColor="inherit" indicatorColor="secondary">
+        <Tab label="Nouvelle commande" />
+        {user && <Tab label="Mes commandes" />}
+      </Tabs>
+
+      {tab === 0 && (
+        <Stack spacing={3}>
 
       {orderMutation.isSuccess && <Alert severity="success">Votre commande a été transmise, un livreur va l'accepter rapidement.</Alert>}
       {(orderMutation.isError || authError) && (
@@ -336,6 +383,56 @@ export default function CustomerOrderPage({ token, user, onRequireAuth }: Props)
           </Stack>
         </CardContent>
       </Card>
+        </Stack>
+      )}
+
+      {tab === 1 && user && (
+        <Stack spacing={3}>
+          <Typography variant="h5" fontWeight={600}>
+            Mes commandes
+          </Typography>
+          {!orders || orders.length === 0 ? (
+            <Alert severity="info">Aucune commande trouvée.</Alert>
+          ) : (
+            orders.map((order) => (
+              <Card key={order.id} className="glass-panel">
+                <CardContent>
+                  <Stack spacing={2}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="h6">Commande #{order.id}</Typography>
+                      <Chip 
+                        label={getStatusText(order.status)} 
+                        color={getStatusColor(order.status) as any}
+                        variant="outlined"
+                      />
+                    </Stack>
+                    <Typography variant="body2" sx={{ opacity: 0.7 }}>
+                      {new Date(order.created_at).toLocaleDateString('fr-FR', {
+                        day: 'numeric',
+                        month: 'long',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </Typography>
+                    <Typography variant="body1">
+                      Prix de livraison: {order.delivery_price_offer} €
+                    </Typography>
+                    <Box>
+                      <Typography variant="subtitle2" gutterBottom>Articles:</Typography>
+                      {order.items.map((orderItem, idx) => (
+                        <Typography key={idx} variant="body2" sx={{ opacity: 0.8 }}>
+                          {orderItem.quantity}x {orderItem.name}
+                        </Typography>
+                      ))}
+                    </Box>
+                  </Stack>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </Stack>
+      )}
     </Stack>
   )
 }
